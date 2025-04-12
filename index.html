@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>智能单词听写系统</title>
+    <style>
+        :root {
+            --primary: #4a90e2;
+            --success: #28a745;
+            --error: #dc3545;
+            --warning: #ffc107;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 2em auto;
+            padding: 1em;
+            background: #f8f9fa;
+        }
+
+        .mode-switcher {
+            text-align: center;
+            margin-bottom: 2em;
+        }
+
+        .mode-btn {
+            padding: 1em 2em;
+            margin: 0 0.5em;
+            border-radius: 20px;
+            cursor: pointer;
+            transition: all 0.3s;
+            background: #f0f0f0;
+        }
+
+        .mode-btn.active {
+            background: var(--primary);
+            color: white;
+        }
+
+        .mode-container {
+            display: none;
+            margin-top: 2em;
+        }
+
+        .mode-container.active {
+            display: block;
+        }
+
+        .controls {
+            display: flex;
+            gap: 1em;
+            justify-content: center;
+            margin: 1em 0;
+        }
+
+        button {
+            padding: 0.8em 1.5em;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: opacity 0.2s;
+        }
+
+        #startBtn {
+            background: var(--primary);
+            color: white;
+        }
+
+        #pauseBtn {
+            background: var(--success);
+            color: white;
+        }
+
+        #endBtn {
+            background: var(--warning);
+            color: black;
+        }
+
+        #shuffleBtn {
+            background: #6c757d;
+            color: white;
+        }
+
+        #shuffleBtn:enabled {
+            background: var(--primary);
+            color: white;
+        }
+
+        #shuffleBtn:disabled {
+            background: #6c757d;
+            color: white;
+            opacity: 0.6;
+        }
+
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .paper-results {
+            max-height: 400px;
+            overflow-y: auto;
+            margin: 1em 0;
+            padding: 1em;
+            background: white;
+            border-radius: 8px;
+        }
+
+        .interactive-section {
+            text-align: center;
+        }
+
+        input[type="text"] {
+            padding: 0.8em;
+            width: 200px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin: 1em 0;
+        }
+
+        .progress {
+            color: #666;
+            margin: 1em 0;
+        }
+
+        .result-panel {
+            min-height: 60px;
+            margin: 1em 0;
+        }
+
+        .retry-btn {
+            background: var(--error);
+            margin-left: 1em;
+        }
+
+        #loading {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(255, 255, 255, 0.9);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            font-size: 1.2em;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="mode-switcher">
+        <button class="mode-btn" data-mode="paper">纸质模式</button>
+        <button class="mode-btn" data-mode="interactive">在线模式</button>
+    </div>
+
+    <div class="shared-controls">
+        <input type="file" id="fileInput" accept=".txt,.json" style="display: none;">
+        <button onclick="document.getElementById('fileInput').click()">导入词单</button>
+        <div class="controls">
+            <button id="startBtn">开始听写</button>
+            <button id="pauseBtn" disabled>暂停</button>
+            <button id="endBtn" disabled>结束</button>
+            <button id="shuffleBtn">打乱顺序</button>
+        </div>
+    </div>
+
+    <div class="mode-container paper-mode">
+        <div class="progress" id="paperProgress"></div>
+        <div class="paper-results" id="paperResults"></div>
+    </div>
+
+    <div class="mode-container interactive-mode">
+        <div class="interactive-section">
+            <div class="progress" id="interactiveProgress"></div>
+            <input type="text" id="answerInput" placeholder="输入拼写后按回车提交" autocomplete="off" disabled>
+            <div class="result-panel" id="result"></div>
+        </div>
+    </div>
+
+    <div id="loading">加载中...</div>
+
+    <script>
+        (function () {
+            const MODES = {
+                PAPER: 'paper',
+                INTERACTIVE: 'interactive'
+            };
+
+            const STATUS = {
+                STOPPED: 0,
+                PLAYING: 1,
+                PAUSED: 2
+            };
+
+            const state = {
+                currentMode: MODES.PAPER,
+                status: STATUS.STOPPED,
+                words: [],
+                currentIndex: 0,
+                errorCount: 0,
+                currentUtterance: null,
+                timeoutId: null
+            };
+
+            const dom = {
+                modeBtns: document.querySelectorAll('.mode-btn'),
+                modeContainers: document.querySelectorAll('.mode-container'),
+                fileInput: document.getElementById('fileInput'),
+                startBtn: document.getElementById('startBtn'),
+                pauseBtn: document.getElementById('pauseBtn'),
+                endBtn: document.getElementById('endBtn'),
+                shuffleBtn: document.getElementById('shuffleBtn'),
+                paperResults: document.getElementById('paperResults'),
+                paperProgress: document.getElementById('paperProgress'),
+                interactiveProgress: document.getElementById('interactiveProgress'),
+                answerInput: document.getElementById('answerInput'),
+                result: document.getElementById('result'),
+                loading: document.getElementById('loading')
+            };
+
+            const speech = {
+                async speak(word) {
+                    this.cancel();
+                    return new Promise((resolve) => {
+                        state.currentUtterance = new SpeechSynthesisUtterance(word);
+                        state.currentUtterance.lang = 'en-US';
+                        state.currentUtterance.rate = 0.9;
+                        state.currentUtterance.onend = resolve;
+                        speechSynthesis.speak(state.currentUtterance);
+                    });
+                },
+                pause() {
+                    speechSynthesis.pause();
+                },
+                resume() {
+                    speechSynthesis.resume();
+                },
+                cancel() {
+                    speechSynthesis.cancel();
+                    state.currentUtterance = null;
+                }
+            };
+
+            // 模式切换
+            dom.modeBtns.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    dom.modeBtns.forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    state.currentMode = btn.dataset.mode;
+                    dom.modeContainers.forEach(container => {
+                        container.classList.toggle('active', container.classList.contains(`${state.currentMode}-mode`));
+                    });
+                    resetState();
+                });
+            });
+
+            // 控制按钮状态
+            function updateControls() {
+                dom.startBtn.disabled = state.status !== STATUS.STOPPED;
+                dom.pauseBtn.disabled = state.status === STATUS.STOPPED;
+                dom.endBtn.disabled = state.status === STATUS.STOPPED;
+                dom.pauseBtn.textContent = state.status === STATUS.PAUSED ? '继续' : '暂停';
+                dom.shuffleBtn.disabled = state.status !== STATUS.STOPPED || (state.currentMode === MODES.PAPER && state.currentIndex > 0);
+                dom.answerInput.disabled = state.currentMode !== MODES.INTERACTIVE || state.status !== STATUS.PLAYING;
+            }
+
+            // 纸质模式逻辑
+            async function paperModePlay() {
+                try {
+                    while (state.currentIndex < state.words.length && state.status === STATUS.PLAYING) {
+                        await speech.speak(state.words[state.currentIndex]);
+                        state.currentIndex++;
+                        updatePaperProgress();
+
+                        if (state.status === STATUS.PLAYING) {
+                            await new Promise(resolve => {
+                                state.timeoutId = setTimeout(resolve, 1500);
+                            });
+                        }
+                    }
+                    stopPlayback(true);
+                } catch (error) {
+                    console.error('播放出错:', error);
+                    stopPlayback(false);
+                }
+            }
+
+            // 在线模式逻辑
+            function startInteractiveMode() {
+                dom.answerInput.value = '';
+                dom.result.innerHTML = '';
+                dom.answerInput.focus();
+                playNextWord();
+            }
+
+            async function playNextWord() {
+                if (state.currentIndex >= state.words.length) {
+                    stopPlayback(true);
+                    return;
+                }
+                updateInteractiveProgress();
+                await speech.speak(state.words[state.currentIndex]);
+            }
+
+            function handleAnswer() {
+                const userInput = dom.answerInput.value.trim().toLowerCase();
+                const correct = state.words[state.currentIndex].toLowerCase();
+
+                if (userInput === correct) {
+                    handleCorrectAnswer();
+                } else {
+                    handleWrongAnswer(correct);
+                }
+            }
+
+            function handleCorrectAnswer() {
+                dom.result.innerHTML = '<span style="color: var(--success)">✅ 正确！</span>';
+                state.currentIndex++;
+                setTimeout(() => {
+                    dom.answerInput.value = '';
+                    playNextWord();
+                }, 800);
+            }
+
+            function handleWrongAnswer(correct) {
+                state.errorCount++;
+                dom.result.innerHTML = `
+            <span style="color: var(--error)">
+                ❌ 错误，正确答案：${correct}
+                <button class="retry-btn" onclick="retryCurrentWord()">重试</button>
+            </span>
+        `;
+                dom.answerInput.value = '';
+                dom.answerInput.focus();
+            }
+
+            // 通用功能
+            async function startPlayback() {
+                if (state.words.length === 0) return alert('请先导入词单');
+
+                state.status = STATUS.PLAYING;
+                state.currentIndex = 0;
+                state.errorCount = 0;
+                updateControls();
+
+                if (state.currentMode === MODES.PAPER) {
+                    dom.paperResults.innerHTML = '';
+                    paperModePlay();
+                } else {
+                    startInteractiveMode();
+                }
+            }
+
+            function togglePause() {
+                if (state.status === STATUS.PLAYING) {
+                    state.status = STATUS.PAUSED;
+                    speech.pause();
+                    clearTimeout(state.timeoutId);
+                } else if (state.status === STATUS.PAUSED) {
+                    state.status = STATUS.PLAYING;
+                    speech.resume();
+                    if (state.currentMode === MODES.PAPER) paperModePlay();
+                }
+                updateControls();
+            }
+
+            function stopPlayback(naturalEnd = false) {
+                state.status = STATUS.STOPPED;
+                clearTimeout(state.timeoutId);
+                speech.cancel();
+                updateControls();
+
+                if (naturalEnd) {
+                    showCompleteMessage();
+                }
+                state.currentIndex = 0;
+
+                // 修复纸质模式结束后无法点击打乱顺序的问题
+                if (state.currentMode === MODES.PAPER) {
+                    dom.shuffleBtn.disabled = false;
+                }
+            }
+
+            function updatePaperProgress() {
+                dom.paperProgress.textContent = `已播放：${state.currentIndex + 1}/${state.words.length}`;
+            }
+
+            function updateInteractiveProgress() {
+                dom.interactiveProgress.textContent = `当前进度：${state.currentIndex + 1}/${state.words.length}`;
+            }
+
+            function showCompleteMessage() {
+                if (state.currentMode === MODES.PAPER) {
+                    dom.paperResults.innerHTML = state.words.map((w, i) =>
+                        `<div class="result-item">${i + 1}. ${w}</div>`
+                    ).join('');
+                } else {
+                    dom.result.innerHTML = `<div style="color: var(--success)">🎉 听写完成！错误次数：${state.errorCount}</div>`;
+                }
+            }
+
+            function resetState() {
+                state.status = STATUS.STOPPED;
+                state.currentIndex = 0;
+                state.errorCount = 0;
+                speech.cancel();
+                dom.paperResults.innerHTML = '';
+                dom.result.innerHTML = '';
+                dom.answerInput.value = '';
+                updateControls();
+            }
+
+            // 事件监听
+            dom.startBtn.addEventListener('click', startPlayback);
+            dom.pauseBtn.addEventListener('click', togglePause);
+            dom.endBtn.addEventListener('click', () => stopPlayback());
+
+            dom.shuffleBtn.addEventListener('click', () => {
+                if (dom.shuffleBtn.disabled) return; // 防止按钮被禁用时点击
+                state.words = shuffleArray([...state.words]);
+                alert('已打乱单词顺序');
+                if (state.status !== STATUS.STOPPED) {
+                    state.currentIndex = 0;
+                    if (state.currentMode === MODES.PAPER) {
+                        stopPlayback();
+                        dom.paperResults.innerHTML = '';
+                    }
+                }
+            });
+
+            dom.fileInput.addEventListener('change', async e => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                dom.loading.style.display = 'flex';
+                try {
+                    const text = await file.text();
+                    state.words = file.name.endsWith('.json')
+                        ? JSON.parse(text)
+                        : text.split(/\r?\n|,/).map(w => w.trim()).filter(w => w);
+                    alert(`成功导入 ${state.words.length} 个单词`);
+                    resetState();
+                } catch (error) {
+                    alert(`导入失败: ${error.message}`);
+                } finally {
+                    dom.loading.style.display = 'none';
+                }
+            });
+
+            dom.answerInput.addEventListener('keypress', e => {
+                if (e.key === 'Enter' && state.currentMode === MODES.INTERACTIVE && state.status === STATUS.PLAYING) {
+                    handleAnswer();
+                }
+            });
+
+            window.retryCurrentWord = () => {
+                speech.speak(state.words[state.currentIndex]);
+                dom.result.innerHTML = ''; // 清除正确答案的显示内容
+                dom.answerInput.focus();
+            };
+
+            function shuffleArray(arr) {
+                for (let i = arr.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [arr[i], arr[j]] = [arr[j], arr[i]];
+                }
+                return arr;
+            }
+
+            // 初始化
+            (function init() {
+                document.querySelector('.mode-btn').click();
+            })();
+        })();
+    </script>
+</body>
+
+</html>
