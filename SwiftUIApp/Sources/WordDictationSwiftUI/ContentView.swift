@@ -1,5 +1,8 @@
 import SwiftUI
 import UniformTypeIdentifiers
+#if os(macOS)
+import AppKit
+#endif
 
 struct ContentView: View {
     @StateObject private var viewModel = DictationViewModel()
@@ -9,7 +12,7 @@ struct ContentView: View {
     var body: some View {
         NavigationSplitView {
             SidebarView(viewModel: viewModel) {
-                isImporterPresented = true
+                presentWordImporter()
             }
             .navigationSplitViewColumnWidth(min: 280, ideal: 320)
         } detail: {
@@ -40,6 +43,24 @@ struct ContentView: View {
                 isAnswerFocused = true
             }
         }
+    }
+
+    private func presentWordImporter() {
+        #if os(macOS)
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.plainText, .json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.title = "选择词单"
+        panel.prompt = "导入"
+
+        if panel.runModal() == .OK, let url = panel.url {
+            viewModel.importWords(from: url)
+        }
+        #else
+        isImporterPresented = true
+        #endif
     }
 
     private var alertBinding: Binding<Bool> {
