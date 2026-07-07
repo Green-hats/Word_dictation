@@ -1,6 +1,6 @@
-# Word Dictation
+# Word Dictation / 英语单词听写练习工具
 
-一个用于英语单词听写和拼写练习的应用。项目现在以 SwiftUI 原生版本为主，网页版本保留在根目录 `index.html` 中。
+一个用于英语单词听写和拼写练习的个人工具项目。当前以 SwiftUI 原生版本为主，网页版本保留在根目录 `index.html` 中。
 
 ## SwiftUI 版本
 
@@ -54,3 +54,12 @@ JSON 文件支持字符串数组：
 ## 网页版本
 
 根目录的 `index.html` 是保留的网页版本，可以直接用浏览器打开。网页版本使用浏览器内置 Web Speech API，建议使用最新版 Chrome、Edge 或 Safari。
+
+## 项目结构
+
+```text
+Word-Dictation/
+├── SwiftUIApp/   # SwiftUI 原生应用
+├── index.html    # 网页版本
+└── README.md
+```
